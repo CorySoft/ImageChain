@@ -1,0 +1,6 @@
+@ImageChain.Web_HostAddress = http://localhost:5073
+
+GET {{ImageChain.Web_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

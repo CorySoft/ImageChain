@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ImageChain.Cli/ImageChain.Cli.csproj" />
+    <Project Path="src/ImageChain.Core/ImageChain.Core.csproj" />
+    <Project Path="src/ImageChain.Web/ImageChain.Web.csproj" />
+  </Folder>
+</Solution>
