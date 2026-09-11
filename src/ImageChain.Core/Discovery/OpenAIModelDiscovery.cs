@@ -70,6 +70,16 @@ public sealed class OpenAIModelDiscovery : IVendorModelDiscovery
             }
         }
 
+        if (item.TryGetProperty("supported_endpoints", out var endpoints) &&
+            endpoints.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var ep in endpoints.EnumerateArray())
+            {
+                if (ep.GetString()?.Equals("images", StringComparison.OrdinalIgnoreCase) == true)
+                    return true;
+            }
+        }
+
         return false;
     }
 
