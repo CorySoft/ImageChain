@@ -444,7 +444,7 @@ async function discover(vendor){
   overlay.classList.remove('hidden');
   try{
     const discovered=await api(`/api/config/vendors/${vendor}/discover`,{method:'POST'});
-    if(!discovered.length)return alert('未找到可用的图像模型');
+    if(!discovered.length){showToast('未找到可用的图像模型','err');return;}
     const vendorData=await api('/api/config/vendors');
     const v=vendorData.find(x=>x.name===vendor);
     if(!v)return;
@@ -460,9 +460,9 @@ async function discover(vendor){
       added++;
     }
     await api('/api/config/vendors',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
-    alert(`已从 ${vendor} 新增 ${added} 个模型`);
+    showToast(`已从 ${vendor} 新增 ${added} 个模型`,added?'ok':'err');
     loadVendors();loadModels();
-  }catch(e){alert('模型发现失败: '+e.message)}
+  }catch(e){showToast('模型发现失败: '+e.message,'err',5000)}
   finally{overlay.classList.add('hidden')}
 }
 
@@ -490,7 +490,7 @@ async function saveConfig(){
   try{
     const items=models.map((m,i)=>{
       const caps={};
-      for(const k of Object.keys(m.capabilities||{}))caps[k]={priority:i+1};
+      for(const k of Object.keys(m.capabilities||{}))caps[k]=i+1;
       return {vendor:m.vendor,modelId:m.id,capabilities:caps};
     });
     await api('/api/config/models/reorder',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(items)});
