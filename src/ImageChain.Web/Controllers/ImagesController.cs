@@ -5,6 +5,7 @@ using ImageChain.Core.Abstractions;
 using ImageChain.Core.Models;
 using ImageChain.Core.Pipeline;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ImageChain.Web.Controllers;
@@ -81,6 +82,7 @@ public class ImagesController : ControllerBase
                     request.ResponseFormat = GetStringProp(root, "response_format", "responseFormat");
                     request.Quality = GetStringProp(root, "quality");
                     request.Style = GetStringProp(root, "style");
+                    request.Composition = GetStringProp(root, "composition");
                     request.AdditionalProperties = ExtractAdditionalProperties(root);
                 }
             }
@@ -103,14 +105,27 @@ public class ImagesController : ControllerBase
             request.Prompt = GetQueryString(Request.Query, "prompt") ?? "a beautiful landscape, mountains and a lake, highly detailed digital art";
         request.Size = request.Size ?? GetQueryString(Request.Query, "size");
         request.ResponseFormat = request.ResponseFormat ?? GetQueryString(Request.Query, "response_format", "responseFormat");
+        request.Composition = request.Composition ?? ReadComposition(Request);
         return request;
     }
 
     private static readonly HashSet<string> KnownBodyProperties = new(StringComparer.OrdinalIgnoreCase)
     {
         "model", "prompt", "n", "count", "size", "response_format", "responseFormat",
-        "quality", "style", "image", "strength"
+        "quality", "style", "image", "strength", "composition"
     };
+
+    private static string? ReadComposition(HttpRequest request)
+    {
+        if (request.Headers.TryGetValue("X-ImageChain-Composition", out var header) &&
+            !string.IsNullOrWhiteSpace(header))
+        {
+            return header.ToString();
+        }
+        if (request.Query.TryGetValue("composition", out var query) && !string.IsNullOrWhiteSpace(query))
+            return query.ToString();
+        return null;
+    }
 
     private static Dictionary<string, object?>? ExtractAdditionalProperties(JsonElement root)
     {
@@ -185,6 +200,7 @@ public class ImagesController : ControllerBase
                     request.Strength = GetFloatProp(root, "strength");
                     request.Size = GetStringProp(root, "size");
                     request.ResponseFormat = GetStringProp(root, "response_format", "responseFormat");
+                    request.Composition = GetStringProp(root, "composition");
                     request.AdditionalProperties = ExtractAdditionalProperties(root);
                 }
             }
@@ -208,6 +224,7 @@ public class ImagesController : ControllerBase
         request.Image = request.Image ?? GetQueryString(Request.Query, "image");
         request.Size = request.Size ?? GetQueryString(Request.Query, "size");
         request.ResponseFormat = request.ResponseFormat ?? GetQueryString(Request.Query, "response_format", "responseFormat");
+        request.Composition = request.Composition ?? ReadComposition(Request);
         return request;
     }
 
@@ -220,6 +237,7 @@ public class ImagesController : ControllerBase
         public string? ResponseFormat { get; set; }
         public string? Quality { get; set; }
         public string? Style { get; set; }
+        public string? Composition { get; set; }
         public Dictionary<string, object?>? AdditionalProperties { get; set; }
     }
 
@@ -231,6 +249,7 @@ public class ImagesController : ControllerBase
         public float? Strength { get; set; }
         public string? Size { get; set; }
         public string? ResponseFormat { get; set; }
+        public string? Composition { get; set; }
         public Dictionary<string, object?>? AdditionalProperties { get; set; }
     }
 
@@ -271,6 +290,7 @@ public class ImagesController : ControllerBase
             Width = width,
             Height = height,
             Count = request.N ?? 1,
+            Composition = request.Composition,
             ProviderParameters = providerParams
         };
 
@@ -373,6 +393,7 @@ public class ImagesController : ControllerBase
             SourceImage = imageBytes,
             SourceMediaType = mediaType,
             Strength = request.Strength,
+            Composition = request.Composition,
             ProviderParameters = providerParams
         };
 

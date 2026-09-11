@@ -197,6 +197,76 @@ public class ConfigController : ControllerBase
         }
     }
 
+    [HttpGet("compositions")]
+    public async Task<IActionResult> GetCompositions()
+    {
+        var options = await _configStore.LoadAsync();
+        return Ok(new
+        {
+            active = options.ActiveComposition,
+            compositions = options.Compositions.Select(c => new
+            {
+                c.Name,
+                c.Description,
+                Models = c.Models.Select(m => new { m.Vendor, m.ModelId }).ToList()
+            }).ToList()
+        });
+    }
+
+    [HttpPut("compositions")]
+    public async Task<IActionResult> SaveComposition([FromBody] CompositionConfig composition)
+    {
+        if (string.IsNullOrWhiteSpace(composition.Name))
+            return BadRequest(new { error = "组合名称不能为空" });
+
+        var options = await _configStore.LoadAsync();
+        options.Compositions.RemoveAll(c => c.Name.Equals(composition.Name, StringComparison.OrdinalIgnoreCase));
+        options.Compositions.Add(composition);
+
+        if (string.IsNullOrEmpty(options.ActiveComposition) && options.Compositions.Count == 1)
+            options.ActiveComposition = composition.Name;
+
+        await _configStore.SaveAsync(options);
+        await ReloadRuntimeAsync();
+        return Ok(new { message = $"组合 '{composition.Name}' 已保存", version = _configStore.CurrentVersion });
+    }
+
+    [HttpPost("compositions/active")]
+    public async Task<IActionResult> ClearActiveComposition()
+    {
+        var options = await _configStore.LoadAsync();
+        options.ActiveComposition = null;
+        await _configStore.SaveAsync(options);
+        await ReloadRuntimeAsync();
+        return Ok(new { message = "已恢复为默认（全局顺序）", version = _configStore.CurrentVersion });
+    }
+
+    [HttpPost("compositions/{name}/active")]
+    public async Task<IActionResult> SetActiveComposition(string name)
+    {
+        var options = await _configStore.LoadAsync();
+        if (!options.Compositions.Any(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+            return NotFound(new { error = $"组合 '{name}' 不存在" });
+
+        options.ActiveComposition = name;
+        await _configStore.SaveAsync(options);
+        await ReloadRuntimeAsync();
+        return Ok(new { message = $"已切换到组合 '{name}'", version = _configStore.CurrentVersion });
+    }
+
+    [HttpDelete("compositions/{name}")]
+    public async Task<IActionResult> DeleteComposition(string name)
+    {
+        var options = await _configStore.LoadAsync();
+        options.Compositions.RemoveAll(c => c.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (string.Equals(options.ActiveComposition, name, StringComparison.OrdinalIgnoreCase))
+            options.ActiveComposition = null;
+
+        await _configStore.SaveAsync(options);
+        await ReloadRuntimeAsync();
+        return Ok(new { message = $"组合 '{name}' 已删除", version = _configStore.CurrentVersion });
+    }
+
     private static string MaskKey(string key)
     {
         if (string.IsNullOrEmpty(key) || key.Length < 8)

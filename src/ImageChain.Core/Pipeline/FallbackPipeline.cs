@@ -1,4 +1,5 @@
 using ImageChain.Core.Abstractions;
+using ImageChain.Core.Configuration;
 using ImageChain.Core.Logging;
 using ImageChain.Core.Models;
 using ImageChain.Core.Providers;
@@ -9,15 +10,18 @@ namespace ImageChain.Core.Pipeline;
 public sealed class FallbackPipeline
 {
     private readonly ProviderCatalog _catalog;
+    private readonly RuntimeConfig _runtime;
     private readonly RequestLogger _requestLogger;
     private readonly ILogger<FallbackPipeline> _logger;
 
     public FallbackPipeline(
         ProviderCatalog catalog,
+        RuntimeConfig runtime,
         RequestLogger requestLogger,
         ILogger<FallbackPipeline> logger)
     {
         _catalog = catalog;
+        _runtime = runtime;
         _requestLogger = requestLogger;
         _logger = logger;
     }
@@ -28,10 +32,14 @@ public sealed class FallbackPipeline
         CancellationToken ct = default)
     {
         var trace = _requestLogger.StartTrace(taskType, request);
-        var providers = _catalog.Providers
-            .Where(p => p.SupportsTaskType(taskType))
-            .OrderBy(p => p.GetPriority(taskType))
-            .ToList();
+        var composition = ResolveComposition(request.Composition);
+        var providers = _catalog.ResolveOrder(taskType, composition);
+
+        if (composition is not null)
+        {
+            _logger.LogInformation("[{TraceId}] 使用调用组合 \"{Composition}\"（{Count} 个模型）",
+                trace.TraceId, composition.Name, providers.Count);
+        }
 
         if (providers.Count == 0)
         {
@@ -101,5 +109,17 @@ public sealed class FallbackPipeline
 
         _requestLogger.CompleteTrace(trace, "ALL_FAILED", failures.Count, false);
         throw new AllHandlersFailedException(taskType, failures);
+    }
+
+    private CompositionConfig? ResolveComposition(string? name)
+    {
+        var requested = string.IsNullOrWhiteSpace(name)
+            ? _runtime.Current.ActiveComposition
+            : name;
+        if (string.IsNullOrWhiteSpace(requested))
+            return null;
+
+        return _runtime.Current.Compositions.FirstOrDefault(c =>
+            c.Name.Equals(requested, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -43,6 +43,38 @@ public sealed class ProviderCatalog : IDisposable
         }
     }
 
+    public IReadOnlyList<IImageProvider> ResolveOrder(TaskType taskType, CompositionConfig? composition)
+    {
+        IReadOnlyList<IImageProvider> all;
+        lock (_lock)
+        {
+            all = _providers;
+        }
+
+        if (composition is null || composition.Models.Count == 0)
+        {
+            return all.Where(p => p.SupportsTaskType(taskType))
+                      .OrderBy(p => p.GetPriority(taskType))
+                      .ToList();
+        }
+
+        var byModel = new Dictionary<string, IImageProvider>(StringComparer.Ordinal);
+        foreach (var provider in all)
+            byModel[provider.VendorName + "\u0000" + provider.ModelId] = provider;
+
+        var ordered = new List<IImageProvider>();
+        foreach (var modelRef in composition.Models)
+        {
+            if (byModel.TryGetValue(modelRef.Vendor + "\u0000" + modelRef.ModelId, out var provider) &&
+                provider.SupportsTaskType(taskType))
+            {
+                ordered.Add(provider);
+            }
+        }
+
+        return ordered;
+    }
+
     private IReadOnlyList<IImageProvider> BuildProviders(ImageChainOptions options)
     {
         var httpClientFactory = _serviceProvider.GetRequiredService<IHttpClientFactory>();

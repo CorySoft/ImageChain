@@ -58,6 +58,12 @@ label{display:block;font-size:.875rem;color:#8b949e;margin-bottom:4px}
 .model-item .info{flex:1}
 .model-item .vendor-tag{font-size:.75rem;padding:2px 6px;border-radius:4px;background:#1f6feb33;color:#58a6ff}
 .model-item .actions{display:flex;gap:6px}
+.comp-item{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:8px 10px;margin-bottom:6px;cursor:grab;display:flex;align-items:center;gap:10px}
+.comp-item:active{cursor:grabbing}
+.comp-item .num{font-weight:700;color:#58a6ff;min-width:22px}
+.comp-item .info{flex:1}
+.comp-item .info .vendor-tag{font-size:.75rem;padding:2px 6px;border-radius:4px;background:#1f6feb33;color:#58a6ff}
+.comp-item input[type=checkbox]{width:auto}
 .badge{display:inline-block;font-size:.75rem;padding:2px 6px;border-radius:4px;margin-right:4px}
 .badge-green{background:#23863633;color:#3fb950}
 .badge-yellow{background:#9e6a0333;color:#d29922}
@@ -111,8 +117,12 @@ label{display:block;font-size:.875rem;color:#8b949e;margin-bottom:4px}
 </div>
 
 <div class="card">
-<h2>模型列表 <small style="color:#8b949e">（拖拽调整优先级）</small></h2>
-<div id="model-list"></div>
+<h2>调用组合</h2>
+<div class="row" style="align-items:center;gap:8px;margin-bottom:0">
+<div style="flex:1"><select id="composition-select" onchange="onCompositionChange(this)"></select></div>
+<div style="flex:0"><button class="btn btn-primary" onclick="newComposition()">新建组合</button></div>
+<div style="flex:0"><button class="btn" onclick="editComposition()">编辑组合</button></div>
+</div>
 </div>
 
 <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
@@ -120,6 +130,11 @@ label{display:block;font-size:.875rem;color:#8b949e;margin-bottom:4px}
 <button class="btn" onclick="exportConfig()">导出 JSON</button>
 <button class="btn" onclick="document.getElementById('import-file').click()">导入 JSON</button>
 <input type="file" id="import-file" accept=".json" class="hidden" onchange="importConfig(event)">
+</div>
+
+<div class="card">
+<h2>模型列表 <small style="color:#8b949e">（拖拽调整优先级）</small></h2>
+<div id="model-list"></div>
 </div>
 </div>
 
@@ -183,6 +198,32 @@ label{display:block;font-size:.875rem;color:#8b949e;margin-bottom:4px}
 <div class="modal-foot">
 <button class="btn" onclick="closeSettings()">取消</button>
 <button class="btn btn-primary" onclick="saveModelSettings()">保存</button>
+</div>
+</div>
+</div>
+
+<div id="comp-modal" class="hidden">
+<div class="modal-bg" onclick="closeCompModal()"></div>
+<div class="modal-box">
+<div class="modal-head">
+<div><strong>编辑调用组合</strong> <span id="comp-title" style="color:#8b949e"></span></div>
+<button class="btn" onclick="closeCompModal()" style="padding:2px 10px">✕</button>
+</div>
+<div class="modal-body">
+<div class="row">
+<div><label>组合名称</label><input id="comp-name"></div>
+<div><label>说明</label><input id="comp-desc"></div>
+</div>
+<div class="caps">
+<h2 style="margin:0 0 8px">调用顺序（勾选包含该模型，下方拖拽排序）</h2>
+<div id="comp-models"></div>
+</div>
+<div id="comp-status"></div>
+</div>
+<div class="modal-foot">
+<button class="btn" onclick="closeCompModal()">取消</button>
+<button class="btn btn-danger" onclick="deleteComposition()">删除组合</button>
+<button class="btn btn-primary" onclick="saveComposition()">保存</button>
 </div>
 </div>
 </div>
@@ -272,6 +313,7 @@ function clearLogs(){
 async function loadAll(){
   await loadVendors();
   await loadModels();
+  await loadCompositions();
 }
 
 async function loadVendors(){
@@ -484,6 +526,149 @@ function showToast(msg,type='ok',ms=3000){
   el.textContent=msg;
   document.getElementById('toast-container').appendChild(el);
   setTimeout(()=>{el.style.transition='opacity .3s';el.style.opacity='0';setTimeout(()=>el.remove(),300);},ms);
+}
+
+let compositions=[];
+let activeComposition=null;
+
+async function loadCompositions(){
+  const d=await api('/api/config/compositions');
+  compositions=d.compositions||[];
+  activeComposition=d.active||null;
+  const sel=document.getElementById('composition-select');
+  let html='<option value="">默认（全局顺序）</option>';
+  compositions.forEach(c=>html+=`<option value="${esc(c.name)}">${esc(c.name)}</option>`);
+  sel.innerHTML=html;
+  sel.value=activeComposition||'';
+}
+
+async function onCompositionChange(sel){
+  const name=sel.value;
+  try{
+    let d;
+    if(name){
+      d=await api(`/api/config/compositions/${encodeURIComponent(name)}/active`,{method:'POST'});
+    }else{
+      d=await api('/api/config/compositions/active',{method:'POST'});
+    }
+    activeComposition=name||null;
+    showToast(d.message||'已切换','ok');
+  }catch(e){
+    showToast(e.message,'err',5000);
+    sel.value=activeComposition||'';
+  }
+}
+
+let compEditingName=null;
+let compOrder=[];
+let compIncluded=new Set();
+
+function openCompEditor(name){
+  if(!name){
+    compEditingName=null;
+    document.getElementById('comp-name').value='';
+    document.getElementById('comp-desc').value='';
+    document.getElementById('comp-title').textContent='（新建）';
+    compOrder=models.map(m=>({vendor:m.vendor,id:m.id}));
+    compIncluded=new Set(compOrder.map(r=>r.vendor+'\u0000'+r.id));
+  }else{
+    const c=compositions.find(x=>x.name===name);
+    if(!c){showToast('组合不存在','err');return;}
+    compEditingName=c.name;
+    document.getElementById('comp-name').value=c.name;
+    document.getElementById('comp-desc').value=c.description||'';
+    document.getElementById('comp-title').textContent='';
+    const refs=(c.models||[]).filter(m=>models.some(x=>x.vendor===m.vendor&&x.id===m.modelId));
+    compIncluded=new Set(refs.map(m=>m.vendor+'\u0000'+m.modelId));
+    compOrder=refs.map(m=>({vendor:m.vendor,id:m.modelId}));
+    for(const m of models){
+      const k=m.vendor+'\u0000'+m.id;
+      if(!compIncluded.has(k))compOrder.push({vendor:m.vendor,id:m.id});
+    }
+  }
+  renderCompModels();
+  document.getElementById('comp-modal').classList.remove('hidden');
+}
+
+function newComposition(){openCompEditor(null)}
+function editComposition(){
+  const sel=document.getElementById('composition-select');
+  openCompEditor(sel.value);
+}
+
+function renderCompModels(){
+  if(!compOrder.length){
+    document.getElementById('comp-models').innerHTML='<p style="color:#8b949e">请先发现并启用模型</p>';
+    return;
+  }
+  let html='';
+  compOrder.forEach((r,i)=>{
+    const m=models.find(x=>x.vendor===r.vendor&&x.id===r.id);
+    const k=r.vendor+'\u0000'+r.id;
+    const checked=compIncluded.has(k)?'checked':'';
+    const label=m&&m.displayName?m.displayName:m.id;
+    html+=`<div class="comp-item" draggable="true" data-idx="${i}"
+      ondragstart="compDragStart(event)" ondragover="event.preventDefault()" ondrop="compDrop(event)">
+      <div class="num">${i+1}</div>
+      <input type="checkbox" ${checked} onchange="compToggle(${i},this.checked)">
+      <div class="info"><span class="vendor-tag">${esc(r.vendor)}</span> <strong>${esc(label)}</strong>
+      ${m&&!m.enabled?'<small style="color:#d29922">（已禁用）</small>':''}</div>
+    </div>`;
+  });
+  document.getElementById('comp-models').innerHTML=html;
+}
+
+function compToggle(idx,checked){
+  const k=compOrder[idx];
+  if(!k)return;
+  if(checked)compIncluded.add(k.vendor+'\u0000'+k.id);
+  else compIncluded.delete(k.vendor+'\u0000'+k.id);
+}
+
+let compDragIdx=null;
+function compDragStart(e){
+  compDragIdx=+e.target.closest('.comp-item').dataset.idx;
+  e.target.closest('.comp-item').style.opacity='.4';
+}
+function compDrop(e){
+  e.preventDefault();
+  const di=+e.target.closest('.comp-item')?.dataset.idx;
+  if(compDragIdx===null||di===undefined||compDragIdx===di)return;
+  const it=compOrder.splice(compDragIdx,1)[0];
+  compOrder.splice(di,0,it);
+  renderCompModels();
+  compDragIdx=null;
+}
+
+function closeCompModal(){
+  document.getElementById('comp-modal').classList.add('hidden');
+  compEditingName=null;
+}
+
+async function saveComposition(){
+  const name=document.getElementById('comp-name').value.trim();
+  if(!name)return showToast('请输入组合名称','err');
+  const refs=compOrder.filter(r=>compIncluded.has(r.vendor+'\u0000'+r.id))
+    .map(r=>({vendor:r.vendor,modelId:r.id}));
+  if(!refs.length)return showToast('请至少勾选一个模型','err');
+  try{
+    const d=await api('/api/config/compositions',{method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name,description:document.getElementById('comp-desc').value.trim()||null,models:refs})});
+    closeCompModal();
+    await loadCompositions();
+    showToast(d.message||'组合已保存','ok');
+  }catch(e){showToast('保存失败: '+e.message,'err',5000)}
+}
+
+async function deleteComposition(){
+  if(!compEditingName)return;
+  if(!confirm(`确认删除组合 ${compEditingName}？`))return;
+  try{
+    await api(`/api/config/compositions/${encodeURIComponent(compEditingName)}`,{method:'DELETE'});
+    closeCompModal();
+    await loadCompositions();
+    showToast('组合已删除','ok');
+  }catch(e){showToast('删除失败: '+e.message,'err',5000)}
 }
 
 async function saveConfig(){
