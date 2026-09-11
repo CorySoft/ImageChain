@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using ImageChain.Core.Abstractions;
@@ -45,11 +46,6 @@ public class ImagesController : ControllerBase
                || EditImgAliases.Contains(m, StringComparer.OrdinalIgnoreCase);
     }
 
-    private static readonly JsonSerializerOptions JsonBodyOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     private static string? GetQueryString(IQueryCollection query, params string[] names)
     {
         foreach (var name in names)
@@ -74,17 +70,18 @@ public class ImagesController : ControllerBase
         {
             try
             {
-                var parsed = JsonSerializer.Deserialize<ImageGenerationRequest>(raw, JsonBodyOptions);
-                if (parsed is not null)
+                using var doc = JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
                 {
-                    request.Model = parsed.Model;
-                    request.Prompt = parsed.Prompt ?? "";
-                    request.N = parsed.N;
-                    request.Size = parsed.Size;
-                    request.ResponseFormat = parsed.ResponseFormat;
-                    request.Quality = parsed.Quality;
-                    request.Style = parsed.Style;
-                    request.AdditionalProperties = parsed.AdditionalProperties;
+                    request.Model = GetStringProp(root, "model");
+                    request.Prompt = GetStringProp(root, "prompt") ?? "";
+                    request.N = GetIntProp(root, "n", "count");
+                    request.Size = GetStringProp(root, "size");
+                    request.ResponseFormat = GetStringProp(root, "response_format", "responseFormat");
+                    request.Quality = GetStringProp(root, "quality");
+                    request.Style = GetStringProp(root, "style");
+                    request.AdditionalProperties = ExtractAdditionalProperties(root);
                 }
             }
             catch (JsonException) { }
@@ -95,7 +92,8 @@ public class ImagesController : ControllerBase
             var form = await Request.ReadFormAsync();
             request.Model = (string?)form["model"];
             request.Prompt = string.IsNullOrEmpty(request.Prompt) ? ((string?)form["prompt"] ?? "") : request.Prompt;
-            request.N = request.N ?? (string?)form["n"] ?? (string?)form["count"];
+            request.N ??= int.TryParse((string?)form["n"], out var fn) ? fn : null;
+            request.N ??= int.TryParse((string?)form["count"], out var fc) ? fc : null;
             request.Size = request.Size ?? (string?)form["size"];
             request.ResponseFormat = request.ResponseFormat ?? (string?)form["response_format"] ?? (string?)form["responseFormat"];
         }
@@ -106,6 +104,61 @@ public class ImagesController : ControllerBase
         request.Size = request.Size ?? GetQueryString(Request.Query, "size");
         request.ResponseFormat = request.ResponseFormat ?? GetQueryString(Request.Query, "response_format", "responseFormat");
         return request;
+    }
+
+    private static readonly HashSet<string> KnownBodyProperties = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "model", "prompt", "n", "count", "size", "response_format", "responseFormat",
+        "quality", "style", "image", "strength"
+    };
+
+    private static Dictionary<string, object?>? ExtractAdditionalProperties(JsonElement root)
+    {
+        Dictionary<string, object?>? dict = null;
+        foreach (var prop in root.EnumerateObject())
+        {
+            if (KnownBodyProperties.Contains(prop.Name)) continue;
+            (dict ??= new Dictionary<string, object?>())[prop.Name] = prop.Value.Clone();
+        }
+        return dict;
+    }
+
+    private static string? GetStringProp(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var prop)) continue;
+            if (prop.ValueKind == JsonValueKind.String) return prop.GetString() ?? "";
+            if (prop.ValueKind == JsonValueKind.Number) return prop.GetRawText();
+            if (prop.ValueKind == JsonValueKind.Object &&
+                prop.TryGetProperty("type", out var type) && type.ValueKind == JsonValueKind.String)
+                return type.GetString();
+        }
+        return null;
+    }
+
+    private static int? GetIntProp(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var prop)) continue;
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i)) return i;
+            if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var s)) return s;
+        }
+        return null;
+    }
+
+    private static float? GetFloatProp(JsonElement obj, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!obj.TryGetProperty(name, out var prop)) continue;
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetSingle(out var f)) return f;
+            if (prop.ValueKind == JsonValueKind.String &&
+                float.TryParse(prop.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var sf))
+                return sf;
+        }
+        return null;
     }
 
     private async Task<ImageTransformRequest> ReadTransformRequestAsync()
@@ -122,16 +175,17 @@ public class ImagesController : ControllerBase
         {
             try
             {
-                var parsed = JsonSerializer.Deserialize<ImageTransformRequest>(raw, JsonBodyOptions);
-                if (parsed is not null)
+                using var doc = JsonDocument.Parse(raw);
+                var root = doc.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
                 {
-                    request.Model = parsed.Model;
-                    request.Prompt = parsed.Prompt ?? "";
-                    request.Image = parsed.Image;
-                    request.Strength = parsed.Strength;
-                    request.Size = parsed.Size;
-                    request.ResponseFormat = parsed.ResponseFormat;
-                    request.AdditionalProperties = parsed.AdditionalProperties;
+                    request.Model = GetStringProp(root, "model");
+                    request.Prompt = GetStringProp(root, "prompt") ?? "";
+                    request.Image = GetStringProp(root, "image");
+                    request.Strength = GetFloatProp(root, "strength");
+                    request.Size = GetStringProp(root, "size");
+                    request.ResponseFormat = GetStringProp(root, "response_format", "responseFormat");
+                    request.AdditionalProperties = ExtractAdditionalProperties(root);
                 }
             }
             catch (JsonException) { }
@@ -161,7 +215,7 @@ public class ImagesController : ControllerBase
     {
         public string? Model { get; set; }
         public string Prompt { get; set; } = "";
-        public string? N { get; set; }
+        public int? N { get; set; }
         public string? Size { get; set; }
         public string? ResponseFormat { get; set; }
         public string? Quality { get; set; }
@@ -216,7 +270,7 @@ public class ImagesController : ControllerBase
             Prompt = request.Prompt,
             Width = width,
             Height = height,
-            Count = int.TryParse(request.N, out var n) ? n : 1,
+            Count = request.N ?? 1,
             ProviderParameters = providerParams
         };
 
